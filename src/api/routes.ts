@@ -207,6 +207,18 @@ async function sendRequestToProvider(
     }
   }
 
+  // *JB* Log the fully transformed request before sending to internet
+  fastify.log.trace({
+    url: url.toString(),
+    requestBody: requestBody,
+    headers: {
+      Authorization: `Bearer ${provider.apiKey}`,
+      ...(config?.headers || {}),
+    },
+    provider: provider.name,
+    msg: "*JB* Fully transformed request going to internet"
+  });
+
   // 发送HTTP请求
   const response = await sendUnifiedRequest(
     url,

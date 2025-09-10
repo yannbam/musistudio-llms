@@ -149,7 +149,6 @@ class Server {
             const [provider, model] = body.model.split(",");
             body.model = model;
             req.provider = provider;
-            req.log.trace(`Request from Claude Code:`)  //JB
             return;
           } catch (err) {
             req.log.error("Error in modelProviderMiddleware:", err);

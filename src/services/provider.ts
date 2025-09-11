@@ -47,7 +47,9 @@ export class ProviderService {
                   if (Array.isArray(transformer) && typeof transformer[0] === 'string') {
                     const Constructor = this.transformerService.getTransformer(transformer[0]);
                     if (Constructor) {
-                      return new (Constructor as TransformerConstructor)(transformer[1]);
+                      const instance = new (Constructor as TransformerConstructor)(transformer[1]);
+                      instance.name = transformer[0];
+                      return instance;
                     } else {
                       console.error(`Transformer '${transformer[0]}' not found for provider '${providerConfig.name}'`);
                       this.logger.error(`Transformer '${transformer[0]}' not found for provider '${providerConfig.name}'`);
@@ -57,7 +59,9 @@ export class ProviderService {
                   if (typeof transformer === 'string') {
                     const transformerInstance = this.transformerService.getTransformer(transformer);
                     if (typeof transformerInstance === 'function') {
-                      return new transformerInstance();
+                      const instance = new transformerInstance();
+                      instance.name = transformer;
+                      return instance;
                     }
                     if (transformerInstance) {
                       return transformerInstance;
@@ -76,7 +80,9 @@ export class ProviderService {
                     if (Array.isArray(transformer) && typeof transformer[0] === 'string') {
                       const Constructor = this.transformerService.getTransformer(transformer[0]);
                       if (Constructor) {
-                        return new (Constructor as TransformerConstructor)(transformer[1]);
+                        const instance = new (Constructor as TransformerConstructor)(transformer[1]);
+                        instance.name = transformer[0];
+                        return instance;
                       } else {
                         console.error(`Model transformer '${transformer[0]}' not found for model '${key}' in provider '${providerConfig.name}'`);
                         this.logger.error(`Model transformer '${transformer[0]}' not found for model '${key}' in provider '${providerConfig.name}'`);
@@ -86,7 +92,9 @@ export class ProviderService {
                     if (typeof transformer === 'string') {
                       const transformerInstance = this.transformerService.getTransformer(transformer);
                       if (typeof transformerInstance === 'function') {
-                        return new transformerInstance();
+                        const instance = new transformerInstance();
+                        instance.name = transformer;
+                        return instance;
                       }
                       if (transformerInstance) {
                         return transformerInstance;

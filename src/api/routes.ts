@@ -8,6 +8,8 @@ import { RegisterProviderRequest, LLMProvider } from "@/types/llm";
 import { sendUnifiedRequest } from "@/utils/request";
 import { createApiError } from "./middleware";
 import { version } from "../../package.json";
+// *JB* Import StreamLoggerTransform for logging untransformed responses from internet
+import { StreamLoggerTransform } from "../../../claude-code-router/src/utils/StreamLogger.transform";
 
 /**
  * 处理transformer端点的主函数
@@ -53,10 +55,68 @@ async function handleTransformerEndpoint(
     transformer
   );
 
+  // *JB* Log untransformed response from internet BEFORE any transformations
+  let loggedResponse = response;
+  
+  // Check if this is a streaming response
+  const isStreamingResponse = response.body && response.body instanceof ReadableStream;
+  
+  if (isStreamingResponse) {
+    // Determine stream type based on agent context from claude-code-router
+    const streamType = (req as any).agents?.length > 0 ? 'agent' : 'regular';
+    
+    // For streaming responses: pipe through StreamLoggerTransform to capture raw stream data
+    req.log.trace({
+      provider: provider.name,
+      model: requestBody.model,
+      status: response.status,
+      headers: Object.fromEntries(response.headers.entries()),
+      streamType: streamType,
+      agentContext: (req as any).agents || null,
+      msg: "*JB* Raw untransformed streaming response from internet - logging stream content"
+    });
+    
+    const loggingTransform = new StreamLoggerTransform(req.log, streamType, 'Raw untransformed');
+    const loggedStream = response.body.pipeThrough(loggingTransform);
+    
+    // Create new response with logged stream
+    loggedResponse = new Response(loggedStream, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers
+    });
+  } else {
+    // Determine stream type based on agent context from claude-code-router  
+    const streamType = (req as any).agents?.length > 0 ? 'agent' : 'regular';
+    
+    // For non-streaming responses: clone and read content for logging
+    try {
+      const clonedResponse = response.clone();
+      const responseText = await clonedResponse.text();
+      
+      req.log.trace({
+        provider: provider.name,
+        model: requestBody.model,
+        status: response.status,
+        headers: Object.fromEntries(response.headers.entries()),
+        streamType: streamType,
+        agentContext: (req as any).agents || null,
+        responseContent: responseText,
+        msg: "*JB* Raw untransformed non-streaming response from internet"
+      });
+    } catch (error) {
+      req.log.error({
+        err: error,
+        provider: provider.name,
+        msg: "*JB* Error logging untransformed response content"
+      });
+    }
+  }
+
   // 处理响应转换器链
   const finalResponse = await processResponseTransformers(
     requestBody,
-    response,
+    loggedResponse,
     provider,
     transformer,
     bypass,

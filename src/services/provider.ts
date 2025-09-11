@@ -48,6 +48,10 @@ export class ProviderService {
                     const Constructor = this.transformerService.getTransformer(transformer[0]);
                     if (Constructor) {
                       return new (Constructor as TransformerConstructor)(transformer[1]);
+                    } else {
+                      console.error(`Transformer '${transformer[0]}' not found for provider '${providerConfig.name}'`);
+                      this.logger.error(`Transformer '${transformer[0]}' not found for provider '${providerConfig.name}'`);
+                      return undefined;
                     }
                   }
                   if (typeof transformer === 'string') {
@@ -55,7 +59,13 @@ export class ProviderService {
                     if (typeof transformerInstance === 'function') {
                       return new transformerInstance();
                     }
-                    return transformerInstance;
+                    if (transformerInstance) {
+                      return transformerInstance;
+                    } else {
+                      console.error(`Transformer '${transformer}' not found for provider '${providerConfig.name}'`);
+                      this.logger.error(`Transformer '${transformer}' not found for provider '${providerConfig.name}'`);
+                      return undefined;
+                    }
                   }
                 }).filter((transformer) => typeof transformer !== 'undefined');
               }
@@ -67,6 +77,10 @@ export class ProviderService {
                       const Constructor = this.transformerService.getTransformer(transformer[0]);
                       if (Constructor) {
                         return new (Constructor as TransformerConstructor)(transformer[1]);
+                      } else {
+                        console.error(`Model transformer '${transformer[0]}' not found for model '${key}' in provider '${providerConfig.name}'`);
+                        this.logger.error(`Model transformer '${transformer[0]}' not found for model '${key}' in provider '${providerConfig.name}'`);
+                        return undefined;
                       }
                     }
                     if (typeof transformer === 'string') {
@@ -74,7 +88,13 @@ export class ProviderService {
                       if (typeof transformerInstance === 'function') {
                         return new transformerInstance();
                       }
-                      return transformerInstance;
+                      if (transformerInstance) {
+                        return transformerInstance;
+                      } else {
+                        console.error(`Model transformer '${transformer}' not found for model '${key}' in provider '${providerConfig.name}'`);
+                        this.logger.error(`Model transformer '${transformer}' not found for model '${key}' in provider '${providerConfig.name}'`);
+                        return undefined;
+                      }
                     }
                   }).filter((transformer) => typeof transformer !== 'undefined')
                 }

@@ -8,8 +8,6 @@ import { RegisterProviderRequest, LLMProvider } from "@/types/llm";
 import { sendUnifiedRequest } from "@/utils/request";
 import { createApiError } from "./middleware";
 import { version } from "../../package.json";
-// *JB* Import StreamLoggerTransform for logging untransformed responses from internet
-import { StreamLoggerTransform } from "../../../claude-code-router/src/utils/StreamLogger.transform";
 
 /**
  * 处理transformer端点的主函数
@@ -41,7 +39,8 @@ async function handleTransformerEndpoint(
     transformer,
     req.headers,
     {
-      req
+      req,
+      fastify
     }
   );
 
@@ -55,73 +54,16 @@ async function handleTransformerEndpoint(
     transformer
   );
 
-  // *JB* Log untransformed response from internet BEFORE any transformations
-  let loggedResponse = response;
-  
-  // Check if this is a streaming response
-  const isStreamingResponse = response.body && response.body instanceof ReadableStream;
-  
-  if (isStreamingResponse) {
-    // Determine stream type based on agent context from claude-code-router
-    const streamType = (req as any).agents?.length > 0 ? 'agent' : 'regular';
-    
-    // For streaming responses: pipe through StreamLoggerTransform to capture raw stream data
-    req.log.trace({
-      provider: provider.name,
-      model: requestBody.model,
-      status: response.status,
-      headers: Object.fromEntries(response.headers.entries()),
-      streamType: streamType,
-      agentContext: (req as any).agents || null,
-      msg: "*JB* Raw untransformed streaming response from internet - logging stream content"
-    });
-    
-    const loggingTransform = new StreamLoggerTransform(req.log, streamType, 'Raw untransformed');
-    const loggedStream = response.body.pipeThrough(loggingTransform);
-    
-    // Create new response with logged stream
-    loggedResponse = new Response(loggedStream, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: response.headers
-    });
-  } else {
-    // Determine stream type based on agent context from claude-code-router  
-    const streamType = (req as any).agents?.length > 0 ? 'agent' : 'regular';
-    
-    // For non-streaming responses: clone and read content for logging
-    try {
-      const clonedResponse = response.clone();
-      const responseText = await clonedResponse.text();
-      
-      req.log.trace({
-        provider: provider.name,
-        model: requestBody.model,
-        status: response.status,
-        headers: Object.fromEntries(response.headers.entries()),
-        streamType: streamType,
-        agentContext: (req as any).agents || null,
-        responseContent: responseText,
-        msg: "*JB* Raw untransformed non-streaming response from internet"
-      });
-    } catch (error) {
-      req.log.error({
-        err: error,
-        provider: provider.name,
-        msg: "*JB* Error logging untransformed response content"
-      });
-    }
-  }
-
   // 处理响应转换器链
   const finalResponse = await processResponseTransformers(
     requestBody,
-    loggedResponse,
+    response,
     provider,
     transformer,
     bypass,
     {
       req,
+      fastify
     }
   );
 
@@ -144,11 +86,30 @@ async function processRequestTransformers(
   let requestBody = body;
   let config = {};
   let bypass = false;
+  
+  // Check if transformer pipeline logging is enabled
+  const enableLogging = context.fastify?._server?.configService?.get('LOG_TRANSFORMER_PIPELINE', false);
+  const reqId = context.req?.id || 'unknown';
+  
+  if (enableLogging) {
+    context.req.log.trace({ 
+      reqId, 
+      model: body.model,
+      msg: "*JB* Starting transformer pipeline for request (in and out)" 
+    });
+  }
 
   // 检查是否应该跳过转换器（透传参数）
   bypass = shouldBypassTransformers(provider, transformer, body);
 
   if (bypass) {
+    if (enableLogging) {
+      context.req.log.trace({ 
+        reqId, 
+        transformer: transformer.name,
+        msg: "*JB* bypass: transparent passthrough" 
+      });
+    }
     if (headers instanceof Headers) {
       headers.delete("content-length");
     } else {
@@ -159,6 +120,13 @@ async function processRequestTransformers(
 
   // 执行transformer的transformRequestOut方法
   if (!bypass && typeof transformer.transformRequestOut === "function") {
+    if (enableLogging) {
+      context.req.log.trace({ 
+        reqId, 
+        transformer: transformer.name,
+        msg: "*JB* transformer: request-out" 
+      });
+    }
     const transformOut = await transformer.transformRequestOut(requestBody);
     if (transformOut.body) {
       requestBody = transformOut.body;
@@ -170,12 +138,22 @@ async function processRequestTransformers(
 
   // 执行provider级别的转换器
   if (!bypass && provider.transformer?.use?.length) {
-    for (const providerTransformer of provider.transformer.use) {
+    for (let i = 0; i < provider.transformer.use.length; i++) {
+      const providerTransformer = provider.transformer.use[i];
       if (
         !providerTransformer ||
         typeof providerTransformer.transformRequestIn !== "function"
       ) {
         continue;
+      }
+      if (enableLogging) {
+        context.req.log.trace({ 
+          reqId, 
+          transformer: providerTransformer.name,
+          index: i + 1,
+          total: provider.transformer.use.length,
+          msg: "*JB* transformer: request-in" 
+        });
       }
       const transformIn = await providerTransformer.transformRequestIn(
         requestBody,
@@ -193,12 +171,23 @@ async function processRequestTransformers(
 
   // 执行模型特定的转换器
   if (!bypass && provider.transformer?.[body.model]?.use?.length) {
-    for (const modelTransformer of provider.transformer[body.model].use) {
+    for (let i = 0; i < provider.transformer[body.model].use.length; i++) {
+      const modelTransformer = provider.transformer[body.model].use[i];
       if (
         !modelTransformer ||
         typeof modelTransformer.transformRequestIn !== "function"
       ) {
         continue;
+      }
+      if (enableLogging) {
+        context.req.log.trace({ 
+          reqId, 
+          transformer: modelTransformer.name,
+          model: body.model,
+          index: i + 1,
+          total: provider.transformer[body.model].use.length,
+          msg: "*JB* (model)-transformer: request-in" 
+        });
       }
       requestBody = await modelTransformer.transformRequestIn(
         requestBody,
@@ -206,6 +195,13 @@ async function processRequestTransformers(
         context
       );
     }
+  }
+
+  if (enableLogging) {
+    context.req.log.trace({ 
+      reqId, 
+      msg: "*JB* Request transformer pipeline complete" 
+    });
   }
 
   return { requestBody, config, bypass };
@@ -320,17 +316,48 @@ async function processResponseTransformers(
   context: any
 ) {
   let finalResponse = response;
+  
+  // Check if transformer pipeline logging is enabled
+  const enableLogging = context.fastify?._server?.configService?.get('LOG_TRANSFORMER_PIPELINE', false);
+  const reqId = context.req?.id || 'unknown';
+  
+  if (enableLogging) {
+    context.req.log.trace({ 
+      reqId, 
+      model: requestBody.model,
+      msg: "*JB* Starting response transformer pipeline (in and out)" 
+    });
+  }
+
+  if (bypass) {
+    if (enableLogging) {
+      context.req.log.trace({ 
+        reqId, 
+        transformer: transformer.name,
+        msg: "*JB* bypass: response transformer pipeline skipped" 
+      });
+    }
+  }
 
   // 执行provider级别的响应转换器
   if (!bypass && provider.transformer?.use?.length) {
-    for (const providerTransformer of Array.from(
-      provider.transformer.use
-    ).reverse()) {
+    const transformers = Array.from(provider.transformer.use).reverse();
+    for (let i = 0; i < transformers.length; i++) {
+      const providerTransformer = transformers[i];
       if (
         !providerTransformer ||
         typeof providerTransformer.transformResponseOut !== "function"
       ) {
         continue;
+      }
+      if (enableLogging) {
+        context.req.log.trace({ 
+          reqId, 
+          transformer: providerTransformer.name,
+          index: i + 1,
+          total: transformers.length,
+          msg: "*JB* transformer: response-out (reverse order)" 
+        });
       }
       finalResponse = await providerTransformer.transformResponseOut(
         finalResponse,
@@ -341,14 +368,24 @@ async function processResponseTransformers(
 
   // 执行模型特定的响应转换器
   if (!bypass && provider.transformer?.[requestBody.model]?.use?.length) {
-    for (const modelTransformer of Array.from(
-      provider.transformer[requestBody.model].use
-    ).reverse()) {
+    const modelTransformers = Array.from(provider.transformer[requestBody.model].use).reverse();
+    for (let i = 0; i < modelTransformers.length; i++) {
+      const modelTransformer = modelTransformers[i];
       if (
         !modelTransformer ||
         typeof modelTransformer.transformResponseOut !== "function"
       ) {
         continue;
+      }
+      if (enableLogging) {
+        context.req.log.trace({ 
+          reqId, 
+          transformer: modelTransformer.name,
+          model: requestBody.model,
+          index: i + 1,
+          total: modelTransformers.length,
+          msg: "*JB* (model)-transformer: response-out (reverse order)" 
+        });
       }
       finalResponse = await modelTransformer.transformResponseOut(
         finalResponse,
@@ -359,10 +396,24 @@ async function processResponseTransformers(
 
   // 执行transformer的transformResponseIn方法
   if (!bypass && transformer.transformResponseIn) {
+    if (enableLogging) {
+      context.req.log.trace({ 
+        reqId, 
+        transformer: transformer.name,
+        msg: "*JB* transformer: response-in" 
+      });
+    }
     finalResponse = await transformer.transformResponseIn(
       finalResponse,
       context
     );
+  }
+
+  if (enableLogging) {
+    context.req.log.trace({ 
+      reqId, 
+      msg: "*JB* Response transformer pipeline complete" 
+    });
   }
 
   return finalResponse;

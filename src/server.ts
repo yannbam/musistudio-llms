@@ -141,13 +141,6 @@ class Server {
           if (req.url.startsWith("/api") || req.method !== "POST") return;
           try {
             const body = req.body as any;
-            req.log.trace({
-              bodyExists: !!body,
-              modelExists: !!body?.model,
-              modelValue: body?.model,
-              fullBody: body,
-              msg: "*JB* Debug: Model check in musistudio-llms preHandler"
-            });  //JB
             if (!body || !body.model) {
               return reply
                 .code(400)

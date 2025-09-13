@@ -51,7 +51,11 @@ async function handleTransformerEndpoint(
     provider,
     fastify,
     bypass,
-    transformer
+    transformer,
+    {
+      req,
+      fastify
+    }
   );
 
   // 处理响应转换器链
@@ -235,7 +239,8 @@ async function sendRequestToProvider(
   provider: any,
   fastify: FastifyInstance,
   bypass: boolean,
-  transformer: any
+  transformer: any,
+  context: any
 ) {
   const url = config.url || new URL(provider.baseUrl);
 
@@ -289,6 +294,87 @@ async function sendRequestToProvider(
     },
     fastify.log
   );
+
+  // *JB* Log raw untransformed response from internet with provider info
+  const responseHeaders = Object.fromEntries(response.headers.entries());
+  const reqId = context.req?.id || 'unknown';
+  const logData: any = {
+    reqId,
+    status: response.status,
+    headers: responseHeaders,
+    provider: provider.name,
+    model: requestBody.model,
+    msg: "*JB* Raw untransformed response from internet"
+  };
+
+  // Extract OpenRouter provider information from response body if available
+  if (provider.name === 'openrouter' || url.toString().includes('openrouter')) {
+    try {
+      const contentType = response.headers.get('content-type') || '';
+
+      if (contentType.includes('text/event-stream')) {
+        // Handle streaming responses by reading first few chunks
+        const [stream1, stream2] = response.body!.tee();
+
+        // Create a new response with the second stream for normal processing
+        const newResponse = new Response(stream2, {
+          status: response.status,
+          statusText: response.statusText,
+          headers: response.headers
+        });
+
+        // Read from first stream to extract provider info
+        const reader = stream1.getReader();
+        const decoder = new TextDecoder();
+        let chunkCount = 0;
+
+        try {
+          while (chunkCount < 5) { // Only read first 5 chunks to find provider
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            const chunk = decoder.decode(value, { stream: true });
+            const lines = chunk.split('\n');
+
+            for (const line of lines) {
+              if (line.startsWith('data: {')) {
+                try {
+                  const jsonData = JSON.parse(line.slice(6)); // Remove 'data: ' prefix
+                  if (jsonData.provider) {
+                    logData.actualProvider = jsonData.provider;
+                    break;
+                  }
+                } catch (e) {
+                  // Ignore individual JSON parse errors
+                }
+              }
+            }
+
+            if (logData.actualProvider) break;
+            chunkCount++;
+          }
+        } finally {
+          reader.releaseLock();
+        }
+
+        // Replace response with the intact stream
+        Object.defineProperty(response, 'body', { value: newResponse.body, writable: true });
+
+      } else {
+        // Handle non-streaming responses
+        const clonedResponse = response.clone();
+        const responseBody = await clonedResponse.json();
+        if (responseBody && responseBody.provider) {
+          logData.actualProvider = responseBody.provider;
+        }
+      }
+    } catch (error) {
+      // Ignore provider extraction errors - don't break the main response flow
+      context.req.log.debug({ error: error.message }, "Failed to extract provider from response");
+    }
+  }
+
+  context.req.log.trace(logData);
 
   // 处理请求错误
   if (!response.ok) {

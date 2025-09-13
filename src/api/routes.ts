@@ -297,9 +297,7 @@ async function sendRequestToProvider(
 
   // *JB* Log raw untransformed response from internet with provider info
   const responseHeaders = Object.fromEntries(response.headers.entries());
-  const reqId = context.req?.id || 'unknown';
   const logData: any = {
-    reqId,
     status: response.status,
     headers: responseHeaders,
     provider: provider.name,
@@ -370,7 +368,7 @@ async function sendRequestToProvider(
       }
     } catch (error) {
       // Ignore provider extraction errors - don't break the main response flow
-      context.req.log.debug({ error: error.message }, "Failed to extract provider from response");
+      context.req.log.debug({ error: (error as Error).message }, "Failed to extract provider from response");
     }
   }
 

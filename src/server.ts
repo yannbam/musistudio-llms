@@ -183,3 +183,6 @@ class Server {
 
 // Export for external use
 export default Server;
+
+// Export utility classes for use in other projects
+export { StreamLoggerTransform } from "./transformer/streamlogger.transformer";
